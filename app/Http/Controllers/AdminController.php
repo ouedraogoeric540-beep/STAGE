@@ -1,0 +1,239 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Models\Evenement;
+use App\Models\LogSysteme;
+use App\Models\Paiement;
+use App\Models\Ticket;
+use App\Models\User;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Hash;
+
+class AdminController extends Controller
+{
+    // Statistiques globales
+    public function statistiques()
+    {
+        return response()->json([
+            'utilisateurs'      => User::count(),
+            'organisateurs'     => User::where('role', 'organisateur')->count(),
+            'agents'            => User::where('role', 'agent')->count(),
+            'evenements_actifs' => Evenement::where('statut', 'actif')->count(),
+            'evenements_termines'=> Evenement::where('statut', 'termine')->count(),
+            'tickets_valides'   => Ticket::where('statut', 'valide')->count(),
+            'tickets_utilises'  => Ticket::where('statut', 'utilise')->count(),
+            'tickets_expires'   => Ticket::where('statut', 'expire')->count(),
+            'revenus_total'     => Paiement::where('statut', 'valide')->sum('montant'),
+            'participants_femmes'=> \App\Models\Participant::where('sexe', 'F')->count(),
+            'participants_hommes'=> \App\Models\Participant::where('sexe', 'M')->count(),
+        ]);
+    }
+
+    public function users(Request $request)
+    {
+        $query = User::with(['agentEvenements' => function ($q) {
+            $q->select('evenements.id', 'titre'); // Load event details
+        }]);
+
+        if ($request->has('role') && $request->role) {
+            $query->where('role', $request->role);
+        }
+
+        return response()->json($query->orderBy('created_at', 'desc')->get());
+    }
+
+    // Créer un compte
+    public function createUser(Request $request)
+    {
+        $request->validate([
+            'name'      => 'required|string|max:191',
+            'prenom'    => 'nullable|string|max:191',
+            'sexe'      => 'nullable|in:M,F',
+            'email'     => 'required|email|max:191|unique:users',
+            'password'  => 'required|string|min:8',
+            'role'      => 'required|in:admin,organisateur,agent',
+            'telephone' => 'nullable|string|max:191',
+        ]);
+
+        $user = User::create([
+            'name'      => $request->name,
+            'prenom'    => $request->prenom,
+            'sexe'      => $request->sexe,
+            'email'     => $request->email,
+            'password'  => Hash::make($request->password),
+            'role'      => $request->role,
+            'statut'    => true,
+            'telephone' => $request->telephone,
+        ]);
+
+        LogSysteme::create([
+            'user_id' => $request->user()->id,
+            'action'  => 'Création compte',
+            'details' => 'Compte ' . $request->role . ' créé : ' . $user->email,
+        ]);
+
+        return response()->json($user, 201);
+    }
+
+    // Toggle statut utilisateur
+    public function toggleUser(Request $request, $id)
+    {
+        $user = User::findOrFail($id);
+        $user->update(['statut' => !$user->statut]);
+
+        LogSysteme::create([
+            'user_id' => $request->user()->id,
+            'action'  => $user->statut ? 'Activation compte' : 'Désactivation compte',
+            'details' => 'Utilisateur : ' . $user->email,
+        ]);
+
+        return response()->json([
+            'message' => 'Statut mis à jour.',
+            'statut'  => $user->statut,
+        ]);
+    }
+
+    // Logs système
+    public function logs()
+    {
+        $logs = LogSysteme::with('user:id,name,email')
+            ->orderBy('created_at', 'desc')
+            ->paginate(50);
+
+        return response()->json($logs);
+    }
+
+    // Tous les événements
+    public function evenements()
+    {
+        $evenements = Evenement::with(['organisateur:id,name'])
+            ->withCount('tickets')
+            ->orderBy('created_at', 'desc')
+            ->get();
+
+        return response()->json($evenements);
+    }
+
+    // Créer un événement (admin)
+    public function createEvenement(Request $request)
+    {
+        $request->validate([
+            'titre'        => 'required|string|max:191',
+            'description'  => 'nullable|string',
+            'date'         => 'required|date',
+            'lieu'         => 'required|string|max:191',
+            'capacite_max' => 'required|integer|min:1',
+            'image'        => 'nullable|image|max:2048',
+            'categories'   => 'required|string',
+        ]);
+
+        $imagePath = null;
+        if ($request->hasFile('image')) {
+            $imagePath = $request->file('image')->store('evenements', 'public');
+        }
+
+        $categories = json_decode($request->categories, true);
+        if (!$categories || !is_array($categories)) {
+            return response()->json(['message' => 'Catégories invalides.'], 422);
+        }
+
+        $evenement = \App\Models\Evenement::create([
+            'organisateur_id' => $request->user()->id,
+            'titre'           => $request->titre,
+            'description'     => $request->description,
+            'date'            => $request->date,
+            'lieu'            => $request->lieu,
+            'capacite_max'    => $request->capacite_max,
+            'image'           => $imagePath,
+            'statut'          => 'actif',
+        ]);
+
+        foreach ($categories as $cat) {
+            \App\Models\CategorieTicket::create([
+                'evenement_id'   => $evenement->id,
+                'nom'            => $cat['nom'],
+                'prix'           => $cat['prix'],
+                'quantite_total' => $cat['quantite_total'],
+            ]);
+        }
+
+        LogSysteme::create([
+            'user_id' => $request->user()->id,
+            'action'  => 'Création événement (Admin)',
+            'details' => 'Événement créé : ' . $evenement->titre,
+        ]);
+
+        return response()->json($evenement->load('categories'), 201);
+    }
+
+    // Modifier un événement (admin)
+    public function updateEvenement(Request $request, $id)
+    {
+        $evenement = \App\Models\Evenement::findOrFail($id);
+
+        $request->validate([
+            'titre'        => 'sometimes|string|max:191',
+            'description'  => 'nullable|string',
+            'date'         => 'sometimes|date',
+            'lieu'         => 'sometimes|string|max:191',
+            'capacite_max' => 'sometimes|integer|min:1',
+            'statut'       => 'sometimes|in:actif,termine,annule',
+            'image'        => 'nullable|image|max:2048',
+            'categories'   => 'nullable|string',
+        ]);
+
+        if ($request->hasFile('image')) {
+            if ($evenement->image) {
+                \Illuminate\Support\Facades\Storage::disk('public')->delete($evenement->image);
+            }
+            $evenement->image = $request->file('image')->store('evenements', 'public');
+        }
+
+        $evenement->update($request->except(['image', 'categories']));
+
+        if ($request->has('categories')) {
+            $categories = json_decode($request->categories, true);
+            if ($categories && is_array($categories)) {
+                $evenement->categories()->delete();
+                foreach ($categories as $cat) {
+                    \App\Models\CategorieTicket::create([
+                        'evenement_id'   => $evenement->id,
+                        'nom'            => $cat['nom'],
+                        'prix'           => $cat['prix'],
+                        'quantite_total' => $cat['quantite_total'],
+                    ]);
+                }
+            }
+        }
+
+        LogSysteme::create([
+            'user_id' => $request->user()->id,
+            'action'  => 'Modification événement (Admin)',
+            'details' => 'Événement modifié : ' . $evenement->titre,
+        ]);
+
+        return response()->json($evenement->load('categories'));
+    }
+
+    // Supprimer un événement (admin)
+    public function deleteEvenement(Request $request, $id)
+    {
+        $evenement = \App\Models\Evenement::findOrFail($id);
+
+        if ($evenement->image) {
+            \Illuminate\Support\Facades\Storage::disk('public')->delete($evenement->image);
+        }
+
+        $titre = $evenement->titre;
+        $evenement->delete();
+
+        LogSysteme::create([
+            'user_id' => $request->user()->id,
+            'action'  => 'Suppression événement (Admin)',
+            'details' => 'Événement supprimé : ' . $titre,
+        ]);
+
+        return response()->json(['message' => 'Événement supprimé.']);
+    }
+}
