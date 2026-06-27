@@ -13,6 +13,37 @@ use App\Mail\AgentAffectationMail;
 
 class AgentController extends Controller
 {
+    public function update(Request $request, $id)
+    {
+        $agent = User::where('role', 'agent')
+            ->where('organisateur_id', $request->user()->id)
+            ->findOrFail($id);
+
+        $request->validate([
+            'name'      => 'required|string|max:191',
+            'prenom'    => 'nullable|string|max:191',
+            'sexe'      => 'nullable|in:M,F',
+            'email'     => 'required|email|max:191|unique:users,email,' . $id,
+            'password'  => 'nullable|string|min:8',
+            'telephone' => 'nullable|string|max:191',
+        ]);
+
+        $data = $request->only(['name', 'prenom', 'sexe', 'email', 'telephone']);
+        if ($request->filled('password')) {
+            $data['password'] = Hash::make($request->password);
+        }
+
+        $agent->update($data);
+
+        LogSysteme::create([
+            'user_id' => $request->user()->id,
+            'action'  => 'Modification agent',
+            'details' => 'Agent modifié : ' . $agent->email,
+        ]);
+
+        return response()->json($agent);
+    }
+
     // Liste des agents de l'organisateur
 public function index(Request $request)
 {
@@ -74,46 +105,67 @@ public function index(Request $request)
     public function affecter(Request $request)
     {
         $request->validate([
-            'agent_id'     => 'required|exists:users,id',
-            'evenement_id' => 'required|exists:evenements,id',
+            'agent_id'      => 'required|exists:users,id',
+            'evenement_ids' => 'required|array',
+            'evenement_ids.*' => 'exists:evenements,id',
         ]);
 
-        // Vérifier que l'événement appartient à l'organisateur
-        $evenement = \App\Models\Evenement::where('organisateur_id', $request->user()->id)
-            ->findOrFail($request->evenement_id);
-
         $agent = User::where('role', 'agent')->findOrFail($request->agent_id);
+        
+        // Liste des événements appartenant à l'organisateur
+        $organisateurEvenements = \App\Models\Evenement::where('organisateur_id', $request->user()->id)
+            ->pluck('id')->toArray();
+        
+        // Les événements soumis qui appartiennent réellement à l'organisateur
+        $evenementsValides = array_intersect($request->evenement_ids, $organisateurEvenements);
 
-        // Vérifier si déjà affecté
-        $exists = DB::table('agent_evenement')
+        // Désactiver (ou supprimer) les affectations existantes pour CET organisateur
+        // qui ne sont pas dans les événements cochés
+        DB::table('agent_evenement')
             ->where('agent_id', $agent->id)
-            ->where('evenement_id', $evenement->id)
-            ->exists();
+            ->whereIn('evenement_id', $organisateurEvenements)
+            ->whereNotIn('evenement_id', $evenementsValides)
+            ->delete();
 
-        if ($exists) {
-            // Réactiver si inactif
-            DB::table('agent_evenement')
+        $count = 0;
+
+        foreach ($evenementsValides as $evenement_id) {
+            $evenement = \App\Models\Evenement::find($evenement_id);
+            if (!$evenement) continue;
+
+            $exists = DB::table('agent_evenement')
                 ->where('agent_id', $agent->id)
                 ->where('evenement_id', $evenement->id)
-                ->update(['actif' => true]);
-        } else {
-            DB::table('agent_evenement')->insert([
-                'agent_id'         => $agent->id,
-                'evenement_id'     => $evenement->id,
-                'actif'            => true,
-                'date_affectation' => now(),
-                'created_at'       => now(),
-                'updated_at'       => now(),
-            ]);
-            
-            // Send email to agent
-            Mail::to($agent->email)->send(new AgentAffectationMail($agent, $evenement));
+                ->exists();
+
+            if ($exists) {
+                DB::table('agent_evenement')
+                    ->where('agent_id', $agent->id)
+                    ->where('evenement_id', $evenement->id)
+                    ->update(['actif' => true]);
+            } else {
+                DB::table('agent_evenement')->insert([
+                    'agent_id'         => $agent->id,
+                    'evenement_id'     => $evenement->id,
+                    'actif'            => true,
+                    'date_affectation' => now(),
+                    'created_at'       => now(),
+                    'updated_at'       => now(),
+                ]);
+                
+                try {
+                    Mail::to($agent->email)->send(new AgentAffectationMail($agent, $evenement));
+                } catch (\Exception $e) {
+                    // Ignorer silencieusement si l'email échoue pour ne pas bloquer l'affectation
+                }
+            }
+            $count++;
         }
 
         LogSysteme::create([
             'user_id' => $request->user()->id,
-            'action'  => 'Affectation agent',
-            'details' => 'Agent #' . $agent->id . ' affecté à : ' . $evenement->titre,
+            'action'  => 'Affectation agent multiple',
+            'details' => "Agent {$agent->email} affecté à {$count} événement(s)",
         ]);
 
         return response()->json(['message' => 'Agent affecté avec succès.']);

@@ -85,10 +85,25 @@ class ScanQRController extends Controller
     // Historique des scans de l'agent
     public function historique(Request $request)
     {
-        $scans = ScanQr::with(['evenement:id,titre', 'ticket.participant'])
-            ->where('agent_id', $request->user()->id)
-            ->orderBy('date_scan', 'desc')
-            ->paginate(20);
+        $query = ScanQr::with(['evenement:id,titre', 'ticket.participant'])
+            ->where('agent_id', $request->user()->id);
+
+        if ($request->has('search') && !empty($request->search)) {
+            $search = $request->search;
+            $query->where(function($q) use ($search) {
+                $q->where('qr_code', 'like', "%{$search}%")
+                  ->orWhereHas('ticket.participant', function($q2) use ($search) {
+                      $q2->where('nom', 'like', "%{$search}%")
+                         ->orWhere('email', 'like', "%{$search}%");
+                  });
+            });
+        }
+
+        if ($request->has('statut') && !empty($request->statut)) {
+            $query->where('resultat', $request->statut);
+        }
+
+        $scans = $query->orderBy('date_scan', 'desc')->paginate(20);
 
         return response()->json($scans);
     }
@@ -96,14 +111,51 @@ class ScanQRController extends Controller
     // Événements assignés à l'agent
     public function evenementsAgent(Request $request)
     {
+        $agentId = $request->user()->id;
+
         $evenements = $request->user()
             ->agentEvenements()
             ->wherePivot('actif', true)
-            ->where('statut', 'actif')
+            ->where('evenements.statut', 'actif')
+            ->withCount([
+                'scans' => function ($query) use ($agentId) {
+                    $query->where('agent_id', $agentId);
+                },
+                'scans as scans_valides_count' => function ($query) use ($agentId) {
+                    $query->where('agent_id', $agentId)->where('resultat', 'valide');
+                },
+                'scans as scans_invalides_count' => function ($query) use ($agentId) {
+                    $query->where('agent_id', $agentId)->where('resultat', '!=', 'valide');
+                }
+            ])
             ->with('categories')
             ->get();
+            
+        // Ajouter la capacité max calculée (somme des catégories ou fallback)
+        $evenements->each(function ($ev) {
+            $ev->capacite_max_calculee = $ev->categories->sum('quantite_total') ?: $ev->capacite_max;
+        });
 
         return response()->json($evenements);
+    }
+
+    // Signaler un problème (Alerte par l'agent)
+    public function alerte(Request $request)
+    {
+        $request->validate([
+            'message'      => 'required|string',
+            'evenement_id' => 'nullable|exists:evenements,id',
+        ]);
+
+        $agent = $request->user();
+
+        LogSysteme::create([
+            'user_id' => $agent->id,
+            'action'  => 'Alerte Urgence',
+            'details' => 'Signalement par l\'agent : ' . $request->message . ($request->evenement_id ? ' (Événement ID: ' . $request->evenement_id . ')' : ''),
+        ]);
+
+        return response()->json(['message' => 'Alerte signalée avec succès.']);
     }
 
     // Logs des scans pour l'organisateur (Suivi en temps réel)
@@ -121,12 +173,27 @@ class ScanQRController extends Controller
         $totalCapacite = \App\Models\Evenement::whereIn('id', $evenementIds)->where('statut', 'actif')->sum('capacite_max');
         $totalScannes = ScanQr::whereIn('evenement_id', $evenementIds)->where('resultat', 'valide')->count();
 
+        // Récupérer les événements actifs pour les stats détaillées
+        $evenementsActifs = \App\Models\Evenement::whereIn('id', $evenementIds)->where('statut', 'actif')->get(['id', 'titre', 'capacite_max']);
+        $statsParEvenement = [];
+        
+        foreach ($evenementsActifs as $ev) {
+            $scansEvent = ScanQr::where('evenement_id', $ev->id)->where('resultat', 'valide')->count();
+            $statsParEvenement[] = [
+                'id' => $ev->id,
+                'titre' => $ev->titre,
+                'capacite_max' => $ev->capacite_max,
+                'total_scannes' => $scansEvent
+            ];
+        }
+
         return response()->json([
             'scans' => $scans,
             'stats' => [
                 'total_scannes' => $totalScannes,
                 'capacite_totale' => $totalCapacite,
-            ]
+            ],
+            'stats_par_evenement' => $statsParEvenement
         ]);
     }
 }

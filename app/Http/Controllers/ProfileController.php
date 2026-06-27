@@ -37,6 +37,7 @@ class ProfileController extends Controller
             'prenom' => $request->prenom,
             'sexe' => $request->sexe,
             'email' => $request->email,
+            'telephone' => $request->telephone,
         ]);
 
         // Si l'utilisateur est un participant, on met aussi à jour la table participants

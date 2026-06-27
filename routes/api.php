@@ -54,6 +54,7 @@ Route::middleware(['auth:sanctum', 'compte.bloque'])->group(function () {
         Route::get('/agents',                  [AgentController::class, 'index']);
         Route::post('/agents',                 [AgentController::class, 'store']);
         Route::post('/agents/affecter',        [AgentController::class, 'affecter']);
+        Route::put('/agents/{id}',         [AgentController::class, 'update']);
         Route::patch('/agents/{id}/toggle',    [AgentController::class, 'toggle']);
         Route::delete('/agents/{id}',          [AgentController::class, 'destroy']);
     });
@@ -63,6 +64,7 @@ Route::middleware(['auth:sanctum', 'compte.bloque'])->group(function () {
         Route::post('/scan',               [ScanQRController::class, 'scanner']);
         Route::get('/scans/historique',    [ScanQRController::class, 'historique']);
         Route::get('/agent/evenements',    [ScanQRController::class, 'evenementsAgent']);
+        Route::post('/agent/alerte',       [ScanQRController::class, 'alerte']);
     });
 
     // ─── Admin ─────────────────────────────────────────────────
@@ -70,6 +72,7 @@ Route::middleware(['auth:sanctum', 'compte.bloque'])->group(function () {
         Route::get('/statistiques',          [AdminController::class, 'statistiques']);
         Route::get('/users',                 [AdminController::class, 'users']);
         Route::post('/users',                [AdminController::class, 'createUser']);
+        Route::post('/users/affecter',       [AdminController::class, 'affecterAgent']);
         Route::patch('/users/{id}/toggle',   [AdminController::class, 'toggleUser']);
         Route::put('/users/{id}',            [AdminController::class, 'updateUser']);
         Route::delete('/users/{id}',         [AdminController::class, 'deleteUser']);

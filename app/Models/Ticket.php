@@ -30,11 +30,10 @@ class Ticket extends Model
                 $typeStr = $evenement && $evenement->type ? strtoupper(substr(preg_replace('/[^a-zA-Z0-9]/', '', $evenement->type), 0, 4)) : 'EVNT';
                 $catStr = $categorie && $categorie->nom ? strtoupper(substr(preg_replace('/[^a-zA-Z0-9]/', '', $categorie->nom), 0, 4)) : 'TICK';
                 $dateStr = date('Ymd');
-                $timeStr = date('His');
                 $rand = strtoupper(\Illuminate\Support\Str::random(3));
 
-                // Format: SP-TYPE-CAT-DATE-TIME-RANDOM
-                $ticket->code_unique = "SP-{$typeStr}-{$catStr}-{$dateStr}-{$timeStr}-{$rand}";
+                // Format: SP-TYPE-CAT-DATE-RANDOM
+                $ticket->code_unique = "SP-{$typeStr}-{$catStr}-{$dateStr}-{$rand}";
             }
             if (empty($ticket->qr_code)) {
                 $ticket->qr_code = hash('sha256', $ticket->code_unique . uniqid('', true));

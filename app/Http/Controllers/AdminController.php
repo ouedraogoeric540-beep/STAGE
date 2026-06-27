@@ -9,6 +9,9 @@ use App\Models\Ticket;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Mail;
+use App\Mail\AgentAffectationMail;
 
 class AdminController extends Controller
 {
@@ -52,7 +55,7 @@ class AdminController extends Controller
             'sexe'      => 'nullable|in:M,F',
             'email'     => 'required|email|max:191|unique:users',
             'password'  => 'required|string|min:8',
-            'role'      => 'required|in:admin,organisateur,agent',
+            'role'      => 'required|in:admin,organisateur,agent,participant',
             'telephone' => 'nullable|string|max:191',
         ]);
 
@@ -74,6 +77,86 @@ class AdminController extends Controller
         ]);
 
         return response()->json($user, 201);
+    }
+
+    public function updateUser(Request $request, $id)
+    {
+        $user = User::findOrFail($id);
+
+        $request->validate([
+            'name'      => 'required|string|max:191',
+            'prenom'    => 'nullable|string|max:191',
+            'sexe'      => 'nullable|in:M,F',
+            'email'     => 'required|email|max:191|unique:users,email,' . $id,
+            'password'  => 'nullable|string|min:8',
+            'role'      => 'required|in:admin,organisateur,agent,participant',
+            'telephone' => 'nullable|string|max:191',
+        ]);
+
+        $data = $request->only(['name', 'prenom', 'sexe', 'email', 'role', 'telephone']);
+        if ($request->filled('password')) {
+            $data['password'] = Hash::make($request->password);
+        }
+
+        $user->update($data);
+
+        LogSysteme::create([
+            'user_id' => $request->user()->id,
+            'action'  => 'Modification compte',
+            'details' => 'Compte ' . $user->role . ' modifié : ' . $user->email,
+        ]);
+
+        return response()->json($user);
+    }
+
+    // Affecter un agent à plusieurs événements (admin)
+    public function affecterAgent(Request $request)
+    {
+        $request->validate([
+            'agent_id'      => 'required|exists:users,id',
+            'evenement_ids' => 'required|array',
+            'evenement_ids.*' => 'exists:evenements,id',
+        ]);
+
+        $agent = User::where('role', 'agent')->findOrFail($request->agent_id);
+        $count = 0;
+
+        foreach ($request->evenement_ids as $evenement_id) {
+            $evenement = Evenement::find($evenement_id);
+            if (!$evenement) continue;
+
+            $exists = DB::table('agent_evenement')
+                ->where('agent_id', $agent->id)
+                ->where('evenement_id', $evenement->id)
+                ->exists();
+
+            if ($exists) {
+                DB::table('agent_evenement')
+                    ->where('agent_id', $agent->id)
+                    ->where('evenement_id', $evenement->id)
+                    ->update(['actif' => true]);
+            } else {
+                DB::table('agent_evenement')->insert([
+                    'agent_id'         => $agent->id,
+                    'evenement_id'     => $evenement->id,
+                    'actif'            => true,
+                    'date_affectation' => now(),
+                    'created_at'       => now(),
+                    'updated_at'       => now(),
+                ]);
+                
+                Mail::to($agent->email)->send(new AgentAffectationMail($agent, $evenement));
+            }
+            $count++;
+        }
+
+        LogSysteme::create([
+            'user_id' => $request->user()->id,
+            'action'  => 'Affectation agent multiple (Admin)',
+            'details' => "Agent {$agent->email} affecté à {$count} événement(s)",
+        ]);
+
+        return response()->json(['message' => 'Agent affecté avec succès.']);
     }
 
     // Toggle statut utilisateur

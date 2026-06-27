@@ -8,36 +8,27 @@ class QRCodeService
 {
     public function genererBase64(string $contenu): string
     {
-        // Essayer l'API externe
         try {
-            $url = 'https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=' . urlencode($contenu);
-            $context = stream_context_create([
-                'http' => [
-                    'timeout'     => 8,
-                    'user_agent'  => 'EventSecure/1.0',
-                ],
-                'ssl' => [
-                    'verify_peer'      => false,
-                    'verify_peer_name' => false,
-                ],
-            ]);
-
-            $imageData = @file_get_contents($url, false, $context);
-
-            if ($imageData !== false && strlen($imageData) > 100) {
-                return base64_encode($imageData);
-            }
+            // Générer un SVG natif, qui ne nécessite pas ext-imagick et est parfait pour DomPDF
+            $svg = \SimpleSoftwareIO\QrCode\Facades\QrCode::format('svg')->size(400)->margin(2)->generate($contenu);
+            return base64_encode($svg);
         } catch (\Exception $e) {
-            Log::warning('API QR Code échouée : ' . $e->getMessage());
+            Log::warning('Erreur génération QrCode (SVG) : ' . $e->getMessage());
+            // Fallback GD (qui renvoie du PNG base64)
+            return $this->genererAvecGD($contenu);
         }
-
-        // Fallback GD
-        return $this->genererAvecGD($contenu);
     }
 
     public function genererDataUri(string $contenu): string
     {
-        return 'data:image/png;base64,' . $this->genererBase64($contenu);
+        try {
+            $svg = \SimpleSoftwareIO\QrCode\Facades\QrCode::format('svg')->size(400)->margin(2)->generate($contenu);
+            return 'data:image/svg+xml;base64,' . base64_encode($svg);
+        } catch (\Exception $e) {
+            Log::warning('Erreur génération QrCode (SVG) : ' . $e->getMessage());
+            // En cas d'erreur de la librairie (peu probable), on fallback sur GD (qui est du PNG)
+            return 'data:image/png;base64,' . $this->genererAvecGD($contenu);
+        }
     }
 
     private function genererAvecGD(string $contenu): string
