@@ -189,7 +189,7 @@ class AdminController extends Controller
     {
         $logs = LogSysteme::with('user:id,name,email')
             ->orderBy('created_at', 'desc')
-            ->paginate(50);
+            ->paginate(6);
 
         return response()->json($logs);
     }
@@ -197,7 +197,7 @@ class AdminController extends Controller
     // Tous les événements
     public function evenements()
     {
-        $evenements = Evenement::with(['organisateur:id,name'])
+        $evenements = Evenement::with(['organisateur:id,name', 'categories'])
             ->withCount('tickets')
             ->orderBy('created_at', 'desc')
             ->get();
