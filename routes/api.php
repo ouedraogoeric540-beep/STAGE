@@ -8,6 +8,7 @@ use App\Http\Controllers\ScanQRController;
 use App\Http\Controllers\TicketController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\RechercheController;
+use App\Http\Controllers\NotificationController;
 use Illuminate\Support\Facades\Route;
 
 // Test API
@@ -32,9 +33,14 @@ Route::middleware(['auth:sanctum', 'compte.bloque'])->group(function () {
 
     Route::get('/tickets/mes-tickets', [TicketController::class, 'mesTickets']);
 
+    // ─── Notifications / Alertes ───────────────────────────────
+    Route::get('/alertes',        [NotificationController::class, 'index']);
+    Route::post('/alertes/read',  [NotificationController::class, 'markAsRead']);
+
     // ─── Profil ────────────────────────────────────────────────
     Route::put('/user/profile',  [ProfileController::class, 'updateProfile']);
     Route::put('/user/password', [ProfileController::class, 'updatePassword']);
+    Route::put('/user/notifications', [ProfileController::class, 'updateNotifPrefs']);
 
     // ─── Recherche globale ─────────────────────────────────────
     Route::get('/recherche', [RechercheController::class, 'search']);
@@ -65,6 +71,10 @@ Route::middleware(['auth:sanctum', 'compte.bloque'])->group(function () {
         Route::get('/scans/historique',    [ScanQRController::class, 'historique']);
         Route::get('/agent/evenements',    [ScanQRController::class, 'evenementsAgent']);
         Route::post('/agent/alerte',       [ScanQRController::class, 'alerte']);
+        
+        // --- Offline Sync ---
+        Route::get('/evenements/{id}/tickets-hashes', [ScanQRController::class, 'getTicketsHashes']);
+        Route::post('/scan/sync', [ScanQRController::class, 'syncOfflineScans']);
     });
 
     // ─── Admin ─────────────────────────────────────────────────
@@ -77,6 +87,7 @@ Route::middleware(['auth:sanctum', 'compte.bloque'])->group(function () {
         Route::put('/users/{id}',            [AdminController::class, 'updateUser']);
         Route::delete('/users/{id}',         [AdminController::class, 'deleteUser']);
         Route::get('/logs',                  [AdminController::class, 'logs']);
+        Route::get('/backup',                [AdminController::class, 'backup']);
         Route::get('/evenements',            [AdminController::class, 'evenements']);
         Route::post('/evenements',           [AdminController::class, 'createEvenement']);
         Route::put('/evenements/{id}',       [AdminController::class, 'updateEvenement']);

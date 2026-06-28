@@ -154,7 +154,15 @@ public function index(Request $request)
                 ]);
                 
                 try {
-                    Mail::to($agent->email)->send(new AgentAffectationMail($agent, $evenement));
+                    $prefs = $agent->notif_prefs ?? null;
+                    $wantsEmail = true;
+                    if (is_array($prefs) && array_key_exists('agentAssigned', $prefs)) {
+                        $wantsEmail = $prefs['agentAssigned'];
+                    }
+
+                    if ($wantsEmail) {
+                        Mail::to($agent->email)->send(new AgentAffectationMail($agent, $evenement));
+                    }
                 } catch (\Exception $e) {
                     // Ignorer silencieusement si l'email échoue pour ne pas bloquer l'affectation
                 }

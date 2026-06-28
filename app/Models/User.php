@@ -14,7 +14,7 @@ class User extends Authenticatable
     protected $fillable = [
         'name', 'prenom', 'sexe', 'email', 'password', 'role',
         'statut', 'tentatives_connexion',
-        'bloque_jusqu_a', 'telephone',
+        'bloque_jusqu_a', 'telephone', 'notif_prefs',
     ];
 
     protected $hidden = ['password', 'remember_token'];
@@ -24,6 +24,7 @@ class User extends Authenticatable
         'password'          => 'hashed',
         'statut'            => 'boolean',
         'bloque_jusqu_a'    => 'datetime',
+        'notif_prefs'       => 'array',
     ];
 
     // Relations

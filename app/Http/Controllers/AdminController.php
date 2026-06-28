@@ -144,8 +144,15 @@ class AdminController extends Controller
                     'created_at'       => now(),
                     'updated_at'       => now(),
                 ]);
-                
-                Mail::to($agent->email)->send(new AgentAffectationMail($agent, $evenement));
+                $prefs = $agent->notif_prefs ?? null;
+                $wantsEmail = true;
+                if (is_array($prefs) && array_key_exists('agentAssigned', $prefs)) {
+                    $wantsEmail = $prefs['agentAssigned'];
+                }
+
+                if ($wantsEmail) {
+                    Mail::to($agent->email)->send(new AgentAffectationMail($agent, $evenement));
+                }
             }
             $count++;
         }
@@ -318,5 +325,55 @@ class AdminController extends Controller
         ]);
 
         return response()->json(['message' => 'Événement supprimé.']);
+    }
+
+    // Sauvegarde globale de la base de données (JSON)
+    public function backup(Request $request)
+    {
+        // Récupérer toutes les tables
+        $tables = DB::select('SHOW TABLES');
+        $dbName = env('DB_DATABASE', 'eventsecure');
+        $property = 'Tables_in_' . $dbName;
+        
+        $backupData = [];
+
+        foreach ($tables as $tableInfo) {
+            // Selon le nom de la base, la propriété peut différer
+            $tableName = null;
+            foreach ($tableInfo as $key => $value) {
+                if (str_starts_with($key, 'Tables_in_')) {
+                    $tableName = $value;
+                    break;
+                }
+            }
+
+            if (!$tableName) {
+                // Fallback si la structure est différente
+                $tableName = array_values((array)$tableInfo)[0];
+            }
+
+            // Ignorer les tables inutiles pour un backup (ex: migrations)
+            if ($tableName === 'migrations' || $tableName === 'personal_access_tokens') {
+                continue;
+            }
+
+            $backupData[$tableName] = DB::table($tableName)->get();
+        }
+
+        LogSysteme::create([
+            'user_id' => $request->user()->id,
+            'action'  => 'Sauvegarde Globale',
+            'details' => 'Export JSON de toutes les tables de la base.',
+            'ip_address' => $request->ip()
+        ]);
+
+        $fileName = 'backup_securepass_' . date('Y-m-d_H-i-s') . '.json';
+
+        return response()->streamDownload(function () use ($backupData) {
+            echo json_encode($backupData, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        }, $fileName, [
+            'Content-Type' => 'application/json',
+            'Content-Disposition' => 'attachment; filename="' . $fileName . '"'
+        ]);
     }
 }

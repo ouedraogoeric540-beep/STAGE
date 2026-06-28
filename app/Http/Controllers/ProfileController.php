@@ -100,4 +100,39 @@ class ProfileController extends Controller
             'message' => 'Mot de passe mis à jour avec succès'
         ]);
     }
+
+    /**
+     * Mettre à jour les préférences de notification
+     */
+    public function updateNotifPrefs(Request $request)
+    {
+        $user = $request->user();
+
+        $request->validate([
+            'ticketPurchased' => 'boolean',
+            'agentAssigned' => 'boolean',
+            'securityAlert' => 'boolean',
+        ]);
+
+        $prefs = $user->notif_prefs ?? [
+            'ticketPurchased' => true,
+            'agentAssigned' => true,
+            'securityAlert' => true,
+        ];
+
+        // Mettre à jour avec les nouvelles valeurs si elles sont fournies
+        if ($request->has('ticketPurchased')) $prefs['ticketPurchased'] = $request->ticketPurchased;
+        if ($request->has('agentAssigned')) $prefs['agentAssigned'] = $request->agentAssigned;
+        if ($request->has('securityAlert')) $prefs['securityAlert'] = $request->securityAlert;
+
+        $user->update([
+            'notif_prefs' => $prefs
+        ]);
+
+        return response()->json([
+            'message' => 'Préférences de notifications mises à jour',
+            'notif_prefs' => $prefs,
+            'user' => $user
+        ]);
+    }
 }

@@ -15,8 +15,19 @@ class EmailService
         $ticket->load(['participant', 'evenement', 'categorie', 'paiement']);
 
         try {
-            Mail::to($ticket->participant->email)
-                ->send(new TicketMail($ticket));
+            $user = \App\Models\User::find($ticket->participant->user_id);
+            $prefs = $user ? $user->notif_prefs : null;
+            
+            // On vérifie la préférence (activé par défaut si non défini)
+            $wantsEmail = true;
+            if (is_array($prefs) && array_key_exists('ticketPurchased', $prefs)) {
+                $wantsEmail = $prefs['ticketPurchased'];
+            }
+
+            if ($wantsEmail) {
+                Mail::to($ticket->participant->email)
+                    ->send(new TicketMail($ticket));
+            }
 
             NotificationEventsecure::create([
                 'user_id'    => $ticket->participant->user_id,

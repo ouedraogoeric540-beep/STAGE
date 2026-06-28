@@ -48,21 +48,36 @@ class EvenementController extends Controller
         $organisateurId = $request->user()->id;
 
         $evenements = Evenement::where('organisateur_id', $organisateurId)
-            ->with(['tickets.participant'])
+            ->withCount([
+                'tickets as femmes' => function ($query) {
+                    $query->whereHas('participant', function ($q) {
+                        $q->where('sexe', 'F');
+                    });
+                },
+                'tickets as hommes' => function ($query) {
+                    $query->whereHas('participant', function ($q) {
+                        $q->where('sexe', 'M');
+                    });
+                },
+                'tickets as non_renseigne' => function ($query) {
+                    $query->where(function ($q) {
+                        $q->whereDoesntHave('participant')
+                          ->orWhereHas('participant', function ($p) {
+                              $p->whereNull('sexe');
+                          });
+                    });
+                }
+            ])
             ->get();
 
         $stats = $evenements->map(function ($event) {
-            $femmes = $event->tickets->filter(fn($t) => $t->participant && $t->participant->sexe === 'F')->count();
-            $hommes = $event->tickets->filter(fn($t) => $t->participant && $t->participant->sexe === 'M')->count();
-            $nonRenseigne = $event->tickets->filter(fn($t) => !$t->participant || !$t->participant->sexe)->count();
-
             return [
                 'id' => $event->id,
                 'titre' => $event->titre,
-                'femmes' => $femmes,
-                'hommes' => $hommes,
-                'non_renseigne' => $nonRenseigne,
-                'total' => $femmes + $hommes + $nonRenseigne
+                'femmes' => $event->femmes,
+                'hommes' => $event->hommes,
+                'non_renseigne' => $event->non_renseigne,
+                'total' => $event->femmes + $event->hommes + $event->non_renseigne
             ];
         });
 
@@ -260,27 +275,15 @@ class EvenementController extends Controller
     {
         $organisateurId = $request->user()->id;
 
-        $tickets = \App\Models\Ticket::whereHas('evenement', function($q) use ($organisateurId) {
+        $revenus = \App\Models\Ticket::whereHas('evenement', function($q) use ($organisateurId) {
             $q->where('organisateur_id', $organisateurId);
         })
         ->where('statut', 'valide')
-        ->orderBy('created_at', 'asc')
+        ->selectRaw('DATE(created_at) as date, SUM(prix_paye) as revenu')
+        ->groupBy('date')
+        ->orderBy('date', 'asc')
         ->get();
 
-        $revenusParJour = $tickets->groupBy(function($t) {
-            return \Carbon\Carbon::parse($t->created_at)->format('Y-m-d');
-        })->map(function ($rows) {
-            return $rows->sum('prix_paye');
-        });
-
-        $result = [];
-        foreach ($revenusParJour as $date => $revenu) {
-            $result[] = [
-                'date' => $date,
-                'revenu' => $revenu
-            ];
-        }
-
-        return response()->json($result);
+        return response()->json($revenus);
     }
 }

@@ -12,6 +12,7 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Validation\ValidationException;
 use App\Mail\CompteBloqueMail;
+use App\Mail\WelcomeParticipantMail;
 
 class AuthController extends Controller
 {
@@ -94,8 +95,20 @@ class AuthController extends Controller
                     'bloque_jusqu_a'       => $bloqueJusqua,
                 ]);
 
-                // Envoyer l'email d'alerte de blocage
-                Mail::to($user->email)->send(new CompteBloqueMail($user, $bloqueJusqua));
+                // Vérifier la préférence de l'utilisateur
+                $prefs = $user->notif_prefs ?? null;
+                $wantsSecurityAlert = true;
+                if (is_array($prefs) && array_key_exists('securityAlert', $prefs)) {
+                    $wantsSecurityAlert = $prefs['securityAlert'];
+                }
+
+                if ($wantsSecurityAlert) {
+                    try {
+                        Mail::to($user->email)->send(new CompteBloqueMail($user, $bloqueJusqua));
+                    } catch (\Exception $e) {
+                        // Ignorer si échec
+                    }
+                }
 
                 LogSysteme::create([
                     'user_id' => $user->id,
@@ -206,6 +219,13 @@ public function registerParticipant(Request $request)
         'ip_address' => $request->ip(),
         'details'    => 'Nouveau participant : ' . $user->email,
     ]);
+
+    // Envoyer l'email de bienvenue
+    try {
+        Mail::to($user->email)->send(new WelcomeParticipantMail($user));
+    } catch (\Exception $e) {
+        \Illuminate\Support\Facades\Log::error("Impossible d'envoyer l'email de bienvenue: " . $e->getMessage());
+    }
 
     return response()->json([
         'message' => 'Compte créé avec succès.',

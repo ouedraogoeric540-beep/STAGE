@@ -155,6 +155,20 @@ class ScanQRController extends Controller
             'details' => 'Signalement par l\'agent : ' . $request->message . ($request->evenement_id ? ' (Événement ID: ' . $request->evenement_id . ')' : ''),
         ]);
 
+        // Créer une notification pour l'organisateur
+        if ($request->evenement_id) {
+            $evenement = \App\Models\Evenement::find($request->evenement_id);
+            if ($evenement) {
+                \App\Models\NotificationEventsecure::create([
+                    'user_id'    => $evenement->organisateur_id,
+                    'type'       => 'alerte',
+                    'contenu'    => 'Alerte agent ' . $agent->name . ' : ' . $request->message . ' (Événement ID: ' . $evenement->id . ')',
+                    'statut'     => 'non_lu',
+                    'date_envoi' => now(),
+                ]);
+            }
+        }
+
         return response()->json(['message' => 'Alerte signalée avec succès.']);
     }
 
@@ -175,15 +189,21 @@ class ScanQRController extends Controller
 
         // Récupérer les événements actifs pour les stats détaillées
         $evenementsActifs = \App\Models\Evenement::whereIn('id', $evenementIds)->where('statut', 'actif')->get(['id', 'titre', 'capacite_max']);
-        $statsParEvenement = [];
         
+        // Requête groupée pour les scans valides par événement
+        $scansParEvenement = ScanQr::select('evenement_id', \Illuminate\Support\Facades\DB::raw('count(*) as total'))
+            ->whereIn('evenement_id', $evenementsActifs->pluck('id'))
+            ->where('resultat', 'valide')
+            ->groupBy('evenement_id')
+            ->pluck('total', 'evenement_id');
+
+        $statsParEvenement = [];
         foreach ($evenementsActifs as $ev) {
-            $scansEvent = ScanQr::where('evenement_id', $ev->id)->where('resultat', 'valide')->count();
             $statsParEvenement[] = [
                 'id' => $ev->id,
                 'titre' => $ev->titre,
                 'capacite_max' => $ev->capacite_max,
-                'total_scannes' => $scansEvent
+                'total_scannes' => $scansParEvenement->get($ev->id, 0)
             ];
         }
 
@@ -194,6 +214,105 @@ class ScanQRController extends Controller
                 'capacite_totale' => $totalCapacite,
             ],
             'stats_par_evenement' => $statsParEvenement
+        ]);
+    }
+
+    // --- OFFLINE SCAN SUPPORT ---
+    
+    // Récupère les hashs de tous les tickets valides d'un événement pour stockage local (offline)
+    public function getTicketsHashes(Request $request, $evenementId)
+    {
+        $agent = $request->user();
+
+        // Vérifier affectation
+        $affecte = $agent->agentEvenements()
+            ->where('evenement_id', $evenementId)
+            ->where('actif', true)
+            ->exists();
+
+        if (!$affecte) {
+            return response()->json(['message' => 'Non autorisé.'], 403);
+        }
+
+        // On renvoie juste le strict minimum pour la base locale de l'agent
+        $tickets = Ticket::where('evenement_id', $evenementId)
+            ->get(['id', 'qr_code', 'code_unique', 'statut']);
+
+        return response()->json($tickets);
+    }
+
+    // Synchronise une liste de scans effectués en mode hors-ligne
+    public function syncOfflineScans(Request $request)
+    {
+        $request->validate([
+            'scans' => 'required|array',
+            'scans.*.qr_code' => 'required|string',
+            'scans.*.evenement_id' => 'required|exists:evenements,id',
+            'scans.*.date_scan' => 'required|date',
+            'scans.*.resultat' => 'required|string',
+        ]);
+
+        $agent = $request->user();
+        $scans = $request->scans;
+        $syncedCount = 0;
+        $errors = [];
+
+        foreach ($scans as $scanData) {
+            $evenementId = $scanData['evenement_id'];
+            $qrCode = $scanData['qr_code'];
+            $dateScan = $scanData['date_scan'];
+            $resultatLocal = $scanData['resultat']; // valide, deja_utilise, mauvais_evenement, invalide
+
+            // Vérifier affectation agent pour cet evt (important s'il a scanné plusieurs events)
+            $affecte = $agent->agentEvenements()->where('evenement_id', $evenementId)->where('actif', true)->exists();
+            if (!$affecte) {
+                $errors[] = ['qr_code' => $qrCode, 'reason' => 'non_affecte'];
+                continue;
+            }
+
+            // Mettre à jour le ticket réel s'il était valide localement
+            $ticket = Ticket::where('qr_code', $qrCode)->orWhere('code_unique', strtoupper($qrCode))->first();
+            
+            $resultatFinal = $resultatLocal;
+
+            if ($ticket) {
+                // S'il était marqué comme valide hors ligne, on le met à jour côté serveur 
+                // MAIS s'il a déjà été utilisé entre-temps par un autre agent, on a un conflit.
+                if ($resultatLocal === 'valide') {
+                    if ($ticket->statut === 'valide') {
+                        $ticket->update(['statut' => 'utilise']);
+                    } else {
+                        // Conflit : le ticket est déjà utilisé/expiré sur le serveur
+                        $resultatFinal = 'conflit_deja_utilise';
+                    }
+                }
+            } else {
+                $resultatFinal = 'invalide'; // Le ticket n'existe pas en vrai
+            }
+
+            // Enregistrer le scan
+            ScanQr::create([
+                'qr_code'      => $qrCode,
+                'ticket_id'    => $ticket?->id,
+                'agent_id'     => $agent->id,
+                'evenement_id' => $evenementId,
+                'resultat'     => $resultatFinal,
+                'date_scan'    => $dateScan, // On utilise l'heure locale de l'appareil
+            ]);
+
+            $syncedCount++;
+        }
+
+        LogSysteme::create([
+            'user_id' => $agent->id,
+            'action'  => 'Synchronisation Offline',
+            'details' => $syncedCount . ' scans synchronisés.',
+        ]);
+
+        return response()->json([
+            'message' => 'Synchronisation terminée',
+            'synced_count' => $syncedCount,
+            'errors' => $errors
         ]);
     }
 }
